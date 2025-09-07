@@ -2,10 +2,10 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Toiletteurs à proximité — France</title>
   <style>
-    :root { --bg:#f7f7f9; --card:#fff; --text:#111; --muted:#6b7280; --accent:#0f172a; }
+    :root{--bg:#f7f7f9;--card:#fff;--text:#111;--muted:#6b7280;--accent:#0f172a}
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--text);margin:0}
     .wrap{max-width:860px;margin:40px auto;padding:0 16px}
     .card{background:var(--card);border-radius:12px;box-shadow:0 8px 18px rgba(0,0,0,.06);padding:18px}
@@ -30,7 +30,6 @@
   <div class="wrap">
     <div class="card">
       <h1>Entrez un code postal pour trouver des <span style="white-space:nowrap">toiletteurs</span> à proximité</h1>
-
       <div class="row" style="margin:8px 0 6px">
         <input id="cp" inputmode="numeric" pattern="\\d{5}" placeholder="ex : 33000" />
         <select id="radius">
@@ -41,165 +40,179 @@
         </select>
         <button id="go">Rechercher</button>
       </div>
-
-      <div class="hint">Données : © OpenStreetMap contributors — Affichage généré côté navigateur.</div>
-
+      <div class="hint">Données : © OpenStreetMap contributors — Appel live Overpass, avec miroir & cache.</div>
       <div id="list" style="margin-top:14px"></div>
     </div>
   </div>
 
   <script>
-    // --------- outils ----------
-    const $ = sel => document.querySelector(sel);
-    const km = (m) => (m/1000).toFixed(1) + " km";
-    const hostname = (url) => { try { return new URL(url).hostname.replace(/^www\./,''); } catch { return ""; } };
-    const haversine = (lat1,lon1,lat2,lon2) => {
-      const toRad = d=>d*Math.PI/180;
-      const R=6371000, dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
-      const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    const $ = s => document.querySelector(s);
+    const km = m => (m/1000).toFixed(1) + " km";
+    const hostname = u => { try { return new URL(u).hostname.replace(/^www\./,''); } catch { return ""; } };
+    const haversine = (lat1,lon1,lat2,lon2)=>{
+      const R=6371000,toRad=d=>d*Math.PI/180;
+      const dLat=toRad(lat2-lat1),dLon=toRad(lon2-lon1);
+      const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
       return 2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
     };
 
-    // Fallback automatique entre plusieurs miroirs Overpass (CORS OK)
-    async function overpassFetch(query) {
+    // Geocoding ultra-rapide via API Etat (fallback Nominatim)
+    async function geocodeByPostcode(cp){
+      try{
+        const gouv = await fetch(
+          "https://geo.api.gouv.fr/communes?"+new URLSearchParams({codePostal:cp,fields:"centre",format:"json"})
+        ).then(r=>r.json());
+        if (gouv && gouv.length){
+          const [lon,lat] = gouv[0].centre.coordinates; // [lon, lat]
+          return {lat,lon};
+        }
+      }catch{}
+      // secours Nominatim
+      const nom = await fetch(
+        "https://nominatim.openstreetmap.org/search?"+new URLSearchParams({format:"json",countrycodes:"fr",postalcode:cp}),
+        { headers: { "Accept-Language":"fr" } }
+      ).then(r=>r.json());
+      if (!nom.length) throw new Error("Code postal introuvable.");
+      return { lat: parseFloat(nom[0].lat), lon: parseFloat(nom[0].lon) };
+    }
+
+    // Overpass avec miroirs + timeout
+    async function overpassFetch(query, msTimeout=9000){
       const endpoints = [
         "https://overpass.kumi.systems/api/interpreter",
         "https://overpass-api.de/api/interpreter",
         "https://overpass.openstreetmap.ru/api/interpreter"
       ];
       const body = new URLSearchParams({ data: query }).toString();
-      for (const url of endpoints) {
-        try {
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-            body
+      for (const url of endpoints){
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), msTimeout);
+        try{
+          const res = await fetch(url,{
+            method:"POST",
+            headers:{ "Content-Type":"application/x-www-form-urlencoded; charset=UTF-8" },
+            body, signal: ctrl.signal
           });
+          clearTimeout(t);
           const ct = (res.headers.get("content-type")||"").toLowerCase();
-          if (!res.ok || !ct.includes("application/json")) {
-            // essaie l'endpoint suivant
-            continue;
-          }
+          if (!res.ok || !ct.includes("application/json")) continue;
           return await res.json();
-        } catch (e) { /* essaie l'endpoint suivant */ }
+        }catch{ clearTimeout(t); /* essaie le miroir suivant */ }
       }
-      throw new Error("Overpass est surchargé. Réessaie dans quelques secondes.");
+      throw new Error("Le service est momentanément occupé. Réessaie dans quelques secondes.");
     }
 
-    async function geocodeByPostcode(cp) {
-      const url = "https://nominatim.openstreetmap.org/search?"
-        + new URLSearchParams({ format:"json", countrycodes:"fr", postalcode:cp }).toString();
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!data.length) throw new Error("Code postal introuvable.");
-      return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-    }
-
-    function buildQuery(lat, lon, radius) {
-      // Tags principaux + variantes + secours par nom (on exclut les toilettes publiques)
+    function buildQuery(lat, lon, r){
       return `
-[out:json][timeout:25];
+[out:json][timeout:20];
 (
-  node["shop"="pet_grooming"](around:${radius},${lat},${lon});
-  way["shop"="pet_grooming"](around:${radius},${lat},${lon});
-  relation["shop"="pet_grooming"](around:${radius},${lat},${lon});
+  node["shop"="pet_grooming"](around:${r},${lat},${lon});
+  way["shop"="pet_grooming"](around:${r},${lat},${lon});
+  relation["shop"="pet_grooming"](around:${r},${lat},${lon});
 
-  node["shop"="pet"]["grooming"="yes"](around:${radius},${lat},${lon});
-  way["shop"="pet"]["grooming"="yes"](around:${radius},${lat},${lon});
-  relation["shop"="pet"]["grooming"="yes"](around:${radius},${lat},${lon});
+  node["shop"="pet"]["grooming"="yes"](around:${r},${lat},${lon});
+  way["shop"="pet"]["grooming"="yes"](around:${r},${lat},${lon});
+  relation["shop"="pet"]["grooming"="yes"](around:${r},${lat},${lon});
 
-  node["service:pet_grooming"="yes"](around:${radius},${lat},${lon});
-  way["service:pet_grooming"="yes"](around:${radius},${lat},${lon});
-  relation["service:pet_grooming"="yes"](around:${radius},${lat},${lon});
+  node["service:pet_grooming"="yes"](around:${r},${lat},${lon});
+  way["service:pet_grooming"="yes"](around:${r},${lat},${lon});
+  relation["service:pet_grooming"="yes"](around:${r},${lat},${lon});
 
-  node["service:dog_grooming"="yes"](around:${radius},${lat},${lon});
-  way["service:dog_grooming"="yes"](around:${radius},${lat},${lon});
-  relation["service:dog_grooming"="yes"](around:${radius},${lat},${lon});
+  node["service:dog_grooming"="yes"](around:${r},${lat},${lon});
+  way["service:dog_grooming"="yes"](around:${r},${lat},${lon});
+  relation["service:dog_grooming"="yes"](around:${r},${lat},${lon});
 
-  node["name"~"toilett|groom",i][amenity!="toilets"](around:${radius},${lat},${lon});
-  way["name"~"toilett|groom",i][amenity!="toilets"](around:${radius},${lat},${lon});
-  relation["name"~"toilett|groom",i][amenity!="toilets"](around:${radius},${lat},${lon});
+  node["name"~"toilett|groom",i][amenity!="toilets"](around:${r},${lat},${lon});
+  way["name"~"toilett|groom",i][amenity!="toilets"](around:${r},${lat},${lon});
+  relation["name"~"toilett|groom",i][amenity!="toilets"](around:${r},${lat},${lon});
 );
 out center tags;`;
     }
 
-    function normalize(el) {
-      const t = el.tags || {};
-      const center = el.center || { lat: el.lat, lon: el.lon };
+    function normalize(el){
+      const t=el.tags||{}, c=el.center||{lat:el.lat,lon:el.lon};
       return {
         name: t.name || "Toiletteur",
         website: t.website || t["contact:website"] || "",
         phone: t.phone || t["contact:phone"] || "",
-        address: [
-          [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" "),
-          [t["addr:postcode"], t["addr:city"]].filter(Boolean).join(" ")
-        ].filter(Boolean).join(", "),
-        lat: center?.lat, lon: center?.lon
+        address: [[t["addr:housenumber"],t["addr:street"]].filter(Boolean).join(" "),
+                  [t["addr:postcode"],t["addr:city"]].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+        lat:c?.lat, lon:c?.lon
       };
     }
 
-    function resultRow(r, cp, dist) {
+    function row(r, cp, dist){
       const site = r.website
         ? `<a href="${r.website}" target="_blank" rel="noreferrer">${hostname(r.website)}</a>`
         : `<a href="https://www.google.com/search?q=${encodeURIComponent(r.name+' toiletteur '+cp)}" target="_blank" rel="noreferrer">Recherche Google</a>`;
       const tel = r.phone ? ` • <a href="tel:${r.phone.replace(/\s+/g,'')}">${r.phone}</a>` : "";
-      const distance = (dist != null) ? `<div class="sm">${km(dist)}</div>` : "";
-      return `
-        <div class="item">
-          <div>
-            <div class="name">${r.name}</div>
-            <div class="sm">${r.address || "Adresse non renseignée"}</div>
-            <div class="sm">${site}${tel}</div>
-          </div>
-          <div class="right">${distance}</div>
-        </div>`;
+      const d = (dist!=null) ? `<div class="sm">${km(dist)}</div>` : "";
+      return `<div class="item"><div>
+          <div class="name">${r.name}</div>
+          <div class="sm">${r.address||"Adresse non renseignée"}</div>
+          <div class="sm">${site}${tel}</div>
+        </div><div class="right">${d}</div></div>`;
     }
 
-    async function search() {
-      const btn = $("#go");
-      const cp = ($("#cp").value || "").trim();
+    async function search(){
+      const cp = ($("#cp").value||"").trim();
       const radius = Number($("#radius").value);
+      const list = $("#list"); const btn=$("#go");
+      list.innerHTML="";
 
-      $("#list").innerHTML = "";
-      if (!/^\d{5}$/.test(cp)) {
-        $("#list").innerHTML = `<div class="sm" style="color:#b91c1c">Entre un code postal français à 5 chiffres.</div>`;
+      if (!/^\d{5}$/.test(cp)){ list.innerHTML=`<div class="sm" style="color:#b91c1c">Entre un code postal français à 5 chiffres.</div>`; return; }
+
+      // cache
+      const key = `toil:${cp}:${radius}`;
+      const cached = sessionStorage.getItem(key);
+      if (cached){
+        render(JSON.parse(cached), cp);
         return;
       }
 
-      btn.disabled = true; btn.textContent = "Recherche…";
-      try {
-        const { lat, lon } = await geocodeByPostcode(cp);
-        const query = buildQuery(lat, lon, radius);
-        const data = await overpassFetch(query);
-        const items = (data.elements || []).map(normalize);
+      btn.disabled=true; btn.textContent="Recherche…";
+      try{
+        const {lat,lon} = await geocodeByPostcode(cp);
+        const q = buildQuery(lat,lon,radius);
+        let data = await overpassFetch(q, 8000);
 
-        // dédupe grossière (nom + coord arrondies)
-        const seen = new Set(), dedup = [];
-        for (const r of items) {
-          const k = `${(r.name||'').toLowerCase()}@${(r.lat||0).toFixed(5)},${(r.lon||0).toFixed(5)}`;
-          if (seen.has(k)) continue; seen.add(k); dedup.push(r);
+        // si rien, élargit automatiquement (jusqu'à 20 km)
+        if (!data.elements || data.elements.length===0 && radius<20000){
+          data = await overpassFetch(buildQuery(lat,lon,20000), 9000);
         }
 
-        // trie par distance depuis le centre CP
-        dedup.forEach(r => r._d = (r.lat && r.lon) ? haversine(lat, lon, r.lat, r.lon) : null);
-        dedup.sort((a,b) => (a._d ?? 1e12) - (b._d ?? 1e12));
-
-        if (dedup.length === 0) {
-          $("#list").innerHTML = `<div class="sm">Aucun résultat dans ce rayon. Essaie d’augmenter la distance.</div>`;
-          return;
+        const items = (data.elements||[]).map(normalize);
+        // dédupe nom+coord
+        const seen=new Set(), res=[];
+        for (const r of items){
+          const k=`${(r.name||'').toLowerCase()}@${(r.lat||0).toFixed(5)},${(r.lon||0).toFixed(5)}`;
+          if (seen.has(k)) continue; seen.add(k); res.push(r);
         }
+        // tri par distance
+        res.forEach(r=>r._d = (r.lat && r.lon) ? haversine(lat,lon,r.lat,r.lon):null);
+        res.sort((a,b)=>(a._d??1e12)-(b._d??1e12));
 
-        $("#list").innerHTML = dedup.map(r => resultRow(r, cp, r._d)).join("") +
-          `<div class="footer">Résultats : ${dedup.length} — source OSM. S’il manque un professionnel, il n’est peut-être pas encore sur OpenStreetMap.</div>`;
-      } catch (e) {
-        $("#list").innerHTML = `<div class="sm" style="color:#b91c1c">${e.message || "Erreur inattendue"}</div>`;
-      } finally {
-        btn.disabled = false; btn.textContent = "Rechercher";
+        sessionStorage.setItem(key, JSON.stringify(res));
+        render(res, cp);
+      }catch(e){
+        list.innerHTML = `<div class="sm" style="color:#b91c1c">${e.message||"Erreur inattendue"}</div>`;
+      }finally{
+        btn.disabled=false; btn.textContent="Rechercher";
       }
     }
 
+    function render(arr, cp){
+      const list=$("#list");
+      if (!arr.length){
+        list.innerHTML = `<div class="sm">Aucun résultat trouvé dans ce secteur. Essaie d’augmenter le rayon.</div>`;
+        return;
+      }
+      list.innerHTML = arr.map(r=>row(r,cp,r._d)).join("")
+        + `<div class="footer">Résultats : ${arr.length} — source OSM. Certains pros peuvent ne pas être encore saisis dans OpenStreetMap.</div>`;
+    }
+
     $("#go").addEventListener("click", search);
-    $("#cp").addEventListener("keydown", (e)=>{ if(e.key==="Enter") search(); });
+    $("#cp").addEventListener("keydown", e=>{ if(e.key==="Enter") search(); });
   </script>
 </body>
 </html>
