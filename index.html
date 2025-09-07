@@ -1,56 +1,205 @@
-<!doctype html><html lang="fr"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Toiletteurs à proximité — France</title>
-<style>
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;background:#f7f7f8;margin:0;padding:24px;color:#111}
-.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:20px;max-width:820px;margin:0 auto}
-h1{font-size:22px;margin:0 0 12px}.row{display:flex;gap:8px;align-items:center;margin:12px 0}
-input,select,button{font-size:16px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px}
-input{flex:1}button{background:#111;color:#fff;cursor:pointer}button:disabled{opacity:.6;cursor:not-allowed}
-.error{color:#b91c1c;margin:8px 0}.item{padding:12px 0;border-bottom:1px solid #eee}.item:last-child{border-bottom:none}
-.name{font-weight:600;margin-bottom:4px}.meta{font-size:14px;color:#555}.meta a{color:#2563eb;text-decoration:none}
-.footer{margin-top:16px;font-size:12px;color:#666}
-</style></head><body>
-<div class="card">
-  <h1>Entrez un code postal pour trouver des toiletteurs à proximité</h1>
-  <div class="row">
-    <input id="cp" placeholder="ex : 33000" maxlength="5">
-    <select id="radius"><option value="5000">5 km</option><option value="10000" selected>10 km</option><option value="20000">20 km</option></select>
-    <button id="btn">Rechercher</button>
-  </div>
-  <div id="error" class="error" style="display:none"></div>
-  <div id="list"></div>
-  <div class="footer">Données : © OpenStreetMap contributors — Affichage généré côté navigateur.</div>
-</div>
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Toiletteurs à proximité — France</title>
+  <style>
+    :root { --bg:#f7f7f9; --card:#fff; --text:#111; --muted:#6b7280; --accent:#0f172a; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--text);margin:0}
+    .wrap{max-width:860px;margin:40px auto;padding:0 16px}
+    .card{background:var(--card);border-radius:12px;box-shadow:0 8px 18px rgba(0,0,0,.06);padding:18px}
+    h1{margin:0 0 12px 0;font-weight:700}
+    .row{display:flex;gap:8px;align-items:center}
+    input,select,button{font-size:16px;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px}
+    input,select{flex:1}
+    button{background:var(--accent);color:#fff;cursor:pointer}
+    button[disabled]{opacity:.6;cursor:not-allowed}
+    .hint{font-size:14px;color:var(--muted);margin:8px 0 0}
+    .item{display:flex;justify-content:space-between;gap:10px;padding:14px 0;border-top:1px solid #f0f0f0}
+    .item:first-child{border-top:none}
+    .name{font-weight:600}
+    .sm{font-size:14px;color:var(--muted)}
+    a{color:#0a58ca;text-decoration:none}
+    a:hover{text-decoration:underline}
+    .right{white-space:nowrap;min-width:120px;text-align:right}
+    .footer{font-size:12px;color:var(--muted);margin-top:10px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Entrez un code postal pour trouver des <span style="white-space:nowrap">toiletteurs</span> à proximité</h1>
 
-<script>
-const DATA_URL = 'toiletteurs-fr.min.json?v=1';
-let DATA = [];
-function hostname(u){ try { return new URL(u).hostname; } catch(e){ return ''; } }
-function haversine(a,b,c,d){const R=6371000,t=x=>x*Math.PI/180,dl=t(c-a),do_=t(d-b),A=Math.sin(dl/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(do_/2)**2;return 2*R*Math.asin(Math.sqrt(A));}
-function fixedUrl(u){if(!u)return'';u=u.trim();if(/^https?:\/\//i.test(u))return u;if(u.startsWith('www.'))return'https://'+u;if(/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(u))return'https://'+u;return'';}
-function siteAndFallback(r){const addr=r.address||'',g=`<a href="https://www.google.com/search?q=${encodeURIComponent((r.name||'toiletteur')+' toilettage '+addr)}" target="_blank" rel="noreferrer">Recherche Google</a>`;const url=fixedUrl(r.website);const site=url?`<a href="${url}" target="_blank" rel="noreferrer">${hostname(url)}</a>`:'';return[site,g].filter(Boolean).join(' • ');}
-async function loadData(){const res=await fetch(DATA_URL); if(!res.ok) throw new Error('Impossible de charger les données.'); DATA=await res.json();}
-async function geocodeCP(cp){const url=`https://nominatim.openstreetmap.org/search?format=json&countrycodes=fr&postalcode=${encodeURIComponent(cp)}`;const r=await fetch(url,{headers:{'Accept-Language':'fr'}});const j=await r.json(); if(!j||!j.length) throw new Error('Code postal introuvable.'); return {lat:parseFloat(j[0].lat),lon:parseFloat(j[0].lon)};}
-function render(list){const root=document.getElementById('list'); root.innerHTML=''; if(!list.length){root.innerHTML='<p>Aucun résultat dans ce rayon.</p>'; return;}
-  for(const r of list){const div=document.createElement('div');div.className='item';
-    const name=document.createElement('div');name.className='name';name.textContent=r.name;
-    const distKm=(r._dist/1000).toFixed(1);
-    const meta=document.createElement('div');meta.className='meta';
-    meta.innerHTML=[r.address||'Adresse non renseignée', siteAndFallback(r), r.phone?`<a href="tel:${r.phone}">${r.phone}</a>`:'', `${distKm} km`].filter(Boolean).join(' • ');
-    div.appendChild(name);div.appendChild(meta);root.appendChild(div);}
-}
-async function onSearch(){const btn=document.getElementById('btn'),err=document.getElementById('error');const cp=(document.getElementById('cp').value||'').trim();const radius=parseInt(document.getElementById('radius').value,10);err.style.display='none';err.textContent='';
-  try{ if(!/^\d{5}$/.test(cp)) throw new Error('Entre un code postal à 5 chiffres.');
-    btn.disabled=true; btn.textContent='Recherche…';
-    if(!DATA.length) await loadData();
-    const {lat,lon}=await geocodeCP(cp);
-    const list=DATA.map(x=>({...x,_dist:haversine(lat,lon,x.lat,x.lon)})).filter(x=>x._dist<=radius).sort((a,b)=>a._dist-b._dist).slice(0,200);
-    render(list);
-  }catch(e){ err.textContent=e.message||'Erreur inattendue'; err.style.display='block'; }
-  finally{ btn.disabled=false; btn.textContent='Rechercher'; }
-}
-document.getElementById('btn').addEventListener('click', onSearch);
-document.getElementById('cp').addEventListener('keydown', e=>{ if(e.key==='Enter') onSearch(); });
-</script>
-</body></html>
+      <div class="row" style="margin:8px 0 6px">
+        <input id="cp" inputmode="numeric" pattern="\\d{5}" placeholder="ex : 33000" />
+        <select id="radius">
+          <option value="5000">5 km</option>
+          <option value="10000" selected>10 km</option>
+          <option value="20000">20 km</option>
+          <option value="30000">30 km</option>
+        </select>
+        <button id="go">Rechercher</button>
+      </div>
+
+      <div class="hint">Données : © OpenStreetMap contributors — Affichage généré côté navigateur.</div>
+
+      <div id="list" style="margin-top:14px"></div>
+    </div>
+  </div>
+
+  <script>
+    // --------- outils ----------
+    const $ = sel => document.querySelector(sel);
+    const km = (m) => (m/1000).toFixed(1) + " km";
+    const hostname = (url) => { try { return new URL(url).hostname.replace(/^www\./,''); } catch { return ""; } };
+    const haversine = (lat1,lon1,lat2,lon2) => {
+      const toRad = d=>d*Math.PI/180;
+      const R=6371000, dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+      const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+      return 2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+    };
+
+    // Fallback automatique entre plusieurs miroirs Overpass (CORS OK)
+    async function overpassFetch(query) {
+      const endpoints = [
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.openstreetmap.ru/api/interpreter"
+      ];
+      const body = new URLSearchParams({ data: query }).toString();
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+            body
+          });
+          const ct = (res.headers.get("content-type")||"").toLowerCase();
+          if (!res.ok || !ct.includes("application/json")) {
+            // essaie l'endpoint suivant
+            continue;
+          }
+          return await res.json();
+        } catch (e) { /* essaie l'endpoint suivant */ }
+      }
+      throw new Error("Overpass est surchargé. Réessaie dans quelques secondes.");
+    }
+
+    async function geocodeByPostcode(cp) {
+      const url = "https://nominatim.openstreetmap.org/search?"
+        + new URLSearchParams({ format:"json", countrycodes:"fr", postalcode:cp }).toString();
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!data.length) throw new Error("Code postal introuvable.");
+      return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    }
+
+    function buildQuery(lat, lon, radius) {
+      // Tags principaux + variantes + secours par nom (on exclut les toilettes publiques)
+      return `
+[out:json][timeout:25];
+(
+  node["shop"="pet_grooming"](around:${radius},${lat},${lon});
+  way["shop"="pet_grooming"](around:${radius},${lat},${lon});
+  relation["shop"="pet_grooming"](around:${radius},${lat},${lon});
+
+  node["shop"="pet"]["grooming"="yes"](around:${radius},${lat},${lon});
+  way["shop"="pet"]["grooming"="yes"](around:${radius},${lat},${lon});
+  relation["shop"="pet"]["grooming"="yes"](around:${radius},${lat},${lon});
+
+  node["service:pet_grooming"="yes"](around:${radius},${lat},${lon});
+  way["service:pet_grooming"="yes"](around:${radius},${lat},${lon});
+  relation["service:pet_grooming"="yes"](around:${radius},${lat},${lon});
+
+  node["service:dog_grooming"="yes"](around:${radius},${lat},${lon});
+  way["service:dog_grooming"="yes"](around:${radius},${lat},${lon});
+  relation["service:dog_grooming"="yes"](around:${radius},${lat},${lon});
+
+  node["name"~"toilett|groom",i][amenity!="toilets"](around:${radius},${lat},${lon});
+  way["name"~"toilett|groom",i][amenity!="toilets"](around:${radius},${lat},${lon});
+  relation["name"~"toilett|groom",i][amenity!="toilets"](around:${radius},${lat},${lon});
+);
+out center tags;`;
+    }
+
+    function normalize(el) {
+      const t = el.tags || {};
+      const center = el.center || { lat: el.lat, lon: el.lon };
+      return {
+        name: t.name || "Toiletteur",
+        website: t.website || t["contact:website"] || "",
+        phone: t.phone || t["contact:phone"] || "",
+        address: [
+          [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" "),
+          [t["addr:postcode"], t["addr:city"]].filter(Boolean).join(" ")
+        ].filter(Boolean).join(", "),
+        lat: center?.lat, lon: center?.lon
+      };
+    }
+
+    function resultRow(r, cp, dist) {
+      const site = r.website
+        ? `<a href="${r.website}" target="_blank" rel="noreferrer">${hostname(r.website)}</a>`
+        : `<a href="https://www.google.com/search?q=${encodeURIComponent(r.name+' toiletteur '+cp)}" target="_blank" rel="noreferrer">Recherche Google</a>`;
+      const tel = r.phone ? ` • <a href="tel:${r.phone.replace(/\s+/g,'')}">${r.phone}</a>` : "";
+      const distance = (dist != null) ? `<div class="sm">${km(dist)}</div>` : "";
+      return `
+        <div class="item">
+          <div>
+            <div class="name">${r.name}</div>
+            <div class="sm">${r.address || "Adresse non renseignée"}</div>
+            <div class="sm">${site}${tel}</div>
+          </div>
+          <div class="right">${distance}</div>
+        </div>`;
+    }
+
+    async function search() {
+      const btn = $("#go");
+      const cp = ($("#cp").value || "").trim();
+      const radius = Number($("#radius").value);
+
+      $("#list").innerHTML = "";
+      if (!/^\d{5}$/.test(cp)) {
+        $("#list").innerHTML = `<div class="sm" style="color:#b91c1c">Entre un code postal français à 5 chiffres.</div>`;
+        return;
+      }
+
+      btn.disabled = true; btn.textContent = "Recherche…";
+      try {
+        const { lat, lon } = await geocodeByPostcode(cp);
+        const query = buildQuery(lat, lon, radius);
+        const data = await overpassFetch(query);
+        const items = (data.elements || []).map(normalize);
+
+        // dédupe grossière (nom + coord arrondies)
+        const seen = new Set(), dedup = [];
+        for (const r of items) {
+          const k = `${(r.name||'').toLowerCase()}@${(r.lat||0).toFixed(5)},${(r.lon||0).toFixed(5)}`;
+          if (seen.has(k)) continue; seen.add(k); dedup.push(r);
+        }
+
+        // trie par distance depuis le centre CP
+        dedup.forEach(r => r._d = (r.lat && r.lon) ? haversine(lat, lon, r.lat, r.lon) : null);
+        dedup.sort((a,b) => (a._d ?? 1e12) - (b._d ?? 1e12));
+
+        if (dedup.length === 0) {
+          $("#list").innerHTML = `<div class="sm">Aucun résultat dans ce rayon. Essaie d’augmenter la distance.</div>`;
+          return;
+        }
+
+        $("#list").innerHTML = dedup.map(r => resultRow(r, cp, r._d)).join("") +
+          `<div class="footer">Résultats : ${dedup.length} — source OSM. S’il manque un professionnel, il n’est peut-être pas encore sur OpenStreetMap.</div>`;
+      } catch (e) {
+        $("#list").innerHTML = `<div class="sm" style="color:#b91c1c">${e.message || "Erreur inattendue"}</div>`;
+      } finally {
+        btn.disabled = false; btn.textContent = "Rechercher";
+      }
+    }
+
+    $("#go").addEventListener("click", search);
+    $("#cp").addEventListener("keydown", (e)=>{ if(e.key==="Enter") search(); });
+  </script>
+</body>
+</html>
